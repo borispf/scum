@@ -1,20 +1,28 @@
+#![crate_name(scum)]
 #![feature(collections)]
+#![feature(core)]
 #![feature(test)]
 
 extern crate test;
-#[cfg(test)] extern crate rand;
+extern crate rand;
+#[macro_use]
+extern crate log;
 
+use rand::{Rng};
 use std::collections::VecDeque;
+use std::fmt::Write;
+use std::num::Float;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct State {
     hands: Vec<Vec<u8>>,
     discard: Vec<u8>,
     next_player: VecDeque<u8>,
-    top_card: Option<(u8, u8)>,
+    top_card: Move,
     player_order: Vec<u8>,
-    // first element is number of cards, 
+    // first element is number of cards,
 }
+pub type Move = Option<(u8, u8)>;
 
 pub const THREE: u8 = 1;
 pub const FOUR : u8 = 2;
@@ -67,10 +75,13 @@ impl State {
     }
 
     pub fn num_players(&self) -> usize { self.hands.len() }
-    pub fn moves(&self) -> Vec<Option<(u8, u8)>> {
+    pub fn moves(&self) -> Vec<Move> {
         let player = self.next_player.front()
             .expect("expected a next player in moves");
         let hand = &self.hands[*player as usize];
+        if self.is_terminal() {
+            return vec![]
+        }
         if self.next_player.len() == 1 {
             return vec![None]
         }
@@ -80,18 +91,15 @@ impl State {
         }
     }
     pub fn is_terminal(&self) -> bool {
-        self.player_order.len() == self.num_players() - 1
+        !self.player_order.is_empty()
     }
-    pub fn apply(&mut self, muve: Option<(u8, u8)>) {
+    pub fn current_player(&self) -> u8 {
+        *self.next_player.front()
+                    .expect("expected a next player in current_player")
+    }
+    pub fn winner(&self) -> u8 { self.player_order[0] }
+    pub fn apply(&mut self, muve: Move) {
         let player = self.next_player.pop_front().expect("Ran out of players");
-        if self.next_player.is_empty() {
-            assert!(muve.is_none(), "state: {:?}, player: {}", &self, player);
-            let num_players = self.num_players() as u8;
-            self.next_player.extend(
-                (player..player + num_players).map(|p| p % num_players));
-            self.top_card = None;
-            return;
-        }
         match muve {
             Some((count, card)) => {
                 assert!(self.top_card.is_none()
@@ -110,6 +118,15 @@ impl State {
             },
             None => {},  // Pass, no nothing.
         }
+        if self.next_player.len() == 1 {
+            assert!(muve.is_none(), "state: {:?}, player: {}", &self, player);
+            let player = self.next_player.pop_front().unwrap();
+            let num_players = self.num_players() as u8;
+            self.next_player.extend(
+                (player..player + num_players).map(|p| p % num_players));
+            self.top_card = None;
+            return;
+        }
     }
     fn play_card(&mut self, player: u8, card: u8) {
         let hand = &mut self.hands[player as usize];
@@ -118,9 +135,17 @@ impl State {
         hand.remove(pos);
         self.discard.push(card);
     }
+    pub fn top_card<'a>(&'a self) -> &'a Move { &self.top_card }
 }
 
-fn moves(hand: &Vec<u8>, count: u8, card: u8) -> Vec<Option<(u8, u8)>> {
+pub fn play_randomly<R>(state: &mut State, rng: &mut R) where R: Rng {
+    while !state.is_terminal() {
+        let action = *rng.choose(&mut state.moves()[..]).unwrap();
+        state.apply(action);
+    }
+}
+
+fn moves(hand: &Vec<u8>, count: u8, card: u8) -> Vec<Move> {
     let mut moves = Vec::with_capacity(hand.len() / count as usize + 2);
     moves.push(None);
     let mut i = hand.len();
@@ -151,7 +176,7 @@ fn moves(hand: &Vec<u8>, count: u8, card: u8) -> Vec<Option<(u8, u8)>> {
     moves
 }
 
-fn all_moves(hand: &Vec<u8>) -> Vec<Option<(u8, u8)>> {
+fn all_moves(hand: &Vec<u8>) -> Vec<Move> {
     if hand.is_empty() {
         return vec![None]
     }
@@ -176,13 +201,109 @@ fn all_moves(hand: &Vec<u8>) -> Vec<Option<(u8, u8)>> {
     moves
 }
 
+const NOBODY: u8 = -1;
+pub struct Node {
+    children: Vec<(Move, Node)>,
+    untried_moves: Vec<Move>,
+    player: u8,
+    wins: f64,
+    plays: f64,
+}
+
+const UCTK: f64 = 0.7;
+
+impl Node {
+    pub fn new(player: u8, untried_moves: Vec<Move>) -> Node {
+        Node {children: vec![], untried_moves: untried_moves,
+            player: player, plays: 0., wins: 0.}
+    }
+
+    pub fn select_child(&self) -> usize {
+        (0..self.children.len()).max_by(|i| {
+            let (_, ref c) = self.children[*i];
+            ((c.wins / c.plays + UCTK * (self.plays.ln() / c.plays).sqrt()) *
+            1000000.) as i64
+        }).unwrap()
+    }
+
+    pub fn add_child<R:Rng>(&mut self, state: &mut State, rng: &mut R) {
+        let player = state.current_player();
+        let move_ = self.untried_moves.pop()
+            .expect("tried to pop untried move");
+        state.apply(move_);
+        let mut moves = state.moves();
+        rng.shuffle(&mut moves);
+        let mut node = Node::new(player, moves);
+        play_randomly(state, rng);
+        node.update(state);
+        self.children.push((move_, node));
+    }
+
+    pub fn update(&mut self, state: &mut State) {
+        self.plays += 1.;
+        if state.winner() == self.player {
+            self.wins += 1.;
+        }
+    }
+
+    pub fn uct<R: Rng>(&mut self, state: &mut State, rng: &mut R) {
+        if self.untried_moves.is_empty() && !self.children.is_empty() {
+            let i = self.select_child();
+            let &mut (move_, ref mut child) = &mut self.children[i];
+            assert_eq!(child.player, state.current_player());
+            state.apply(move_);
+            child.uct(state, rng);
+        } else if !self.untried_moves.is_empty() {
+            self.add_child(state, rng);
+        }
+        self.update(state);
+    }
+
+    pub fn tree_string(&self) -> String {
+        let mut str = String::new();
+        self.write_tree(0, None, &mut str);
+        str
+    }
+
+    #[allow(unused_must_use)]
+    fn write_tree<W: Write>(&self, indent: usize, m: Move, w: &mut W) {
+        let indent_string = self.indent_string(indent);
+        writeln!(w, "{}{:?}: [P:{} W/P:{}/{} U:{:?}]",
+            indent_string, m, self.player, self.wins as usize,
+            self.plays as usize, self.untried_moves);
+        for &(move_, ref child) in self.children.iter() {
+            child.write_tree(indent + 1, move_, w);
+        }
+    }
+    fn indent_string(&self, indent: usize) -> String {
+        let mut str = String::with_capacity(2 * indent);
+        for _ in 0..indent {
+            str.push_str("| ");
+        }
+        str
+    }
+}
+
+pub fn best_move<R: Rng>(state: &State, iters: usize, rng: &mut R) -> Move {
+    let mut moves = state.moves();
+    rng.shuffle(&mut moves);
+    let mut root = Node::new(NOBODY, moves);
+    for _ in 0..iters {
+        root.uct(&mut state.clone(), rng);
+    }
+    if state.top_card.is_none() {
+        debug!("\n{}", root.tree_string());
+    }
+    root.children.iter().max_by(|c| c.1.plays as i64).unwrap().0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use super::{all_moves, moves};
 
     #[allow(non_snake_case)]
-    fn M(count: u8, card: u8) -> Option<(u8, u8)> { Some((count, card)) }
+    fn M(count: u8, card: u8) -> Move { Some((count, card)) }
 
     #[test]
     fn test_moves() {
@@ -330,10 +451,24 @@ mod bench {
             let mut deck = DECK.to_vec();
             rng.shuffle(&mut deck[..]);
             let mut state = State::new(5, deck);
-            while !state.is_terminal() {
-                let action = *rng.choose(&mut state.moves()[..]).unwrap();
-                state.apply(action);
-            }
+            play_randomly(&mut state, &mut rng);
+            state.winner()
+        });
+    }
+
+    #[bench]
+    fn bench_uct(b: &mut Bencher) {
+        let mut rng = weak_rng();
+        let mut deck = DECK.to_vec();
+        rng.shuffle(&mut deck[..]);
+        let state = State::new(5, deck);
+        let mut root = Node::new(state.current_player(), state.moves());
+        for _ in 0..10000 {
+            root.uct(&mut state.clone(), &mut rng);
+        }
+        b.iter(|| {
+            root.uct(&mut state.clone(), &mut rng);
+            root.plays
         });
     }
 }
