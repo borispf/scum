@@ -1,0 +1,9 @@
+[package]
+
+name = "scum"
+version = "0.0.1"
+authors = ["Boris Pfahringer <bpnzltd@gmail.com>"]
+
+
+[dev-dependencies]
+rand = "*"
