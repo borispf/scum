@@ -121,29 +121,31 @@ impl State {
 }
 
 fn moves(hand: &Vec<u8>, count: u8, card: u8) -> Vec<Option<(u8, u8)>> {
-    let mut moves = vec![None];
-    let mut i = 0;
-    let end = hand.len();
+    let mut moves = Vec::with_capacity(hand.len() / count as usize + 2);
+    moves.push(None);
+    let mut i = hand.len();
     let offset = count as usize - 1;
-    while i < end {
+    let mut has_joker = false;
+    while i > 0 {
+        i -= 1;
         if hand[i] <= card {
-            i += 1;
-            continue;
+            break;
         }
         if hand[i] == JOKER {
-            moves.push(Some((1, JOKER)));
+            if !has_joker {
+                moves.push(Some((1, JOKER)));
+                has_joker = true;
+            }
+            continue;
+        }
+        if i < offset {
             break;
         }
-        if i + offset >= end {
-            break;
-        }
-        if hand[i] == hand[i + offset] {
+        if hand[i] == hand[i - offset] {
             let card = hand[i];
             moves.push(Some((count, card)));
-            i += count as usize;
-            while i < end && hand[i] == card { i += 1; }
-        } else {
-            i += 1;
+            i -= offset;
+            while i > 1 && hand[i] == card { i -= 1; }
         }
     }
     moves
@@ -187,22 +189,22 @@ mod tests {
         let hand = vec![THREE, FOUR, FOUR, FOUR, FOUR, JOKER, JOKER];
 
         assert_eq!(
-            vec![None, M(1, FOUR), M(1, JOKER)], moves(&hand, 1, THREE));
+            vec![None, M(1, JOKER), M(1, FOUR)], moves(&hand, 1, THREE));
         assert_eq!(vec![None, M(1, JOKER)], moves(&hand, 1, FOUR));
         assert_eq!(vec![None, M(1, JOKER)], moves(&hand, 1, FIVE));
 
         assert_eq!(
-            vec![None, M(2, FOUR), M(1, JOKER)], moves(&hand, 2, THREE));
+            vec![None, M(1, JOKER), M(2, FOUR)], moves(&hand, 2, THREE));
         assert_eq!(vec![None, M(1, JOKER)], moves(&hand, 2, FOUR));
         assert_eq!(vec![None, M(1, JOKER)], moves(&hand, 2, FIVE));
 
         assert_eq!(
-            vec![None, M(3, FOUR), M(1, JOKER)], moves(&hand, 3, THREE));
+            vec![None, M(1, JOKER), M(3, FOUR)], moves(&hand, 3, THREE));
         assert_eq!(vec![None, M(1, JOKER)], moves(&hand, 3, FOUR));
         assert_eq!(vec![None, M(1, JOKER)], moves(&hand, 3, FIVE));
 
         assert_eq!(
-            vec![None, M(4, FOUR), M(1, JOKER)], moves(&hand, 4, THREE));
+            vec![None, M(1, JOKER), M(4, FOUR)], moves(&hand, 4, THREE));
         assert_eq!(vec![None, M(1, JOKER)], moves(&hand, 4, FOUR));
         assert_eq!(vec![None, M(1, JOKER)], moves(&hand, 4, FIVE));
     }
