@@ -1,6 +1,7 @@
 #![crate_name(scum)]
 #![feature(collections)]
 #![feature(core)]
+#![feature(std_misc)]
 #![feature(test)]
 
 extern crate test;
@@ -9,20 +10,33 @@ extern crate rand;
 extern crate log;
 
 use rand::{Rng};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
+use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::fmt::Write;
 use std::num::Float;
 
 #[derive(Clone, Debug)]
 pub struct State {
-    hands: Vec<Vec<u8>>,
+    hands: Vec<Hand>,
+    top_card: Move,
+    discard: Vec<u8>,
+    next_player: VecDeque<u8>,
+    finishing_order: Vec<u8>,
+}
+
+pub struct PartialState {
+    player: u8,
+    hand_sizes: Vec<usize>,
+    hand: Hand,
     discard: Vec<u8>,
     next_player: VecDeque<u8>,
     top_card: Move,
-    player_order: Vec<u8>,
-    // first element is number of cards,
+    finishing_order: Vec<u8>,
 }
+
+// first element is number of cards,
 pub type Move = Option<(u8, u8)>;
+pub type Hand = Vec<u8>;
 
 pub const THREE: u8 = 1;
 pub const FOUR : u8 = 2;
@@ -71,7 +85,52 @@ impl State {
         let discard = Vec::with_capacity(54);
         let next_player = (0..num_players as u8).collect();
         State {hands: hands, discard: discard, next_player: next_player,
-               top_card: None, player_order: vec![]}
+               top_card: None, finishing_order: vec![]}
+    }
+
+    pub fn realisation_from<R: Rng>(ps: &PartialState, rng: &mut R) -> State {
+        let mut deck = DECK.to_vec();
+        for card in ps.hand.iter().chain(ps.discard.iter()) {
+            let pos = deck.iter().position(|c| *c == *card)
+                .expect("couldn't find card2");
+            deck.remove(pos);
+        }
+        assert_eq!(deck.len(), 54 - ps.discard.len() - ps.hand.len());
+        rng.shuffle(&mut deck);
+        let mut hands = Vec::with_capacity(ps.hand_sizes.len());
+        // println!("{:?}", ps.hand_sizes);
+        for (i, size) in ps.hand_sizes.iter().enumerate() {
+            if i == ps.player as usize {
+                hands.push(ps.hand.clone());
+            } else {
+                let cards_left = deck.len();
+                // println!("{:?} {:?}", size, deck.len());
+                let mut hand = deck.split_off(cards_left - *size);
+                hand.sort();
+                hands.push(hand);
+            }
+        }
+        assert_eq!(0, deck.len());
+        State {
+            hands: hands,
+            discard: ps.discard.clone(),
+            next_player: ps.next_player.clone(),
+            top_card: ps.top_card.clone(),
+            finishing_order: ps.finishing_order.clone(),
+        }
+    }
+    pub fn to_partial_state(&self) -> PartialState {
+        let hand_sizes = self.hands.iter().map(|h| h.len()).collect();
+        let player = self.current_player();
+        PartialState {
+            player: player,
+            hand_sizes: hand_sizes,
+            hand: self.hands[player as usize].clone(),
+            discard: self.discard.clone(),
+            next_player: self.next_player.clone(),
+            top_card: self.top_card.clone(),
+            finishing_order: self.finishing_order.clone(),
+        }
     }
 
     pub fn num_players(&self) -> usize { self.hands.len() }
@@ -91,13 +150,13 @@ impl State {
         }
     }
     pub fn is_terminal(&self) -> bool {
-        !self.player_order.is_empty()
+        !self.finishing_order.is_empty()
     }
     pub fn current_player(&self) -> u8 {
         *self.next_player.front()
                     .expect("expected a next player in current_player")
     }
-    pub fn winner(&self) -> u8 { self.player_order[0] }
+    pub fn winner(&self) -> u8 { self.finishing_order[0] }
     pub fn apply(&mut self, muve: Move) {
         let player = self.next_player.pop_front().expect("Ran out of players");
         match muve {
@@ -112,7 +171,7 @@ impl State {
                     self.play_card(player, card);
                 }
                 if self.hands[player as usize].is_empty() {
-                    self.player_order.push(player);
+                    self.finishing_order.push(player);
                 }
                 self.top_card = muve
             },
@@ -130,6 +189,7 @@ impl State {
     }
     fn play_card(&mut self, player: u8, card: u8) {
         let hand = &mut self.hands[player as usize];
+        // println!("{:?} {:?} {:?}", player, card, hand);
         let pos = hand.iter().position(|c| *c == card)
             .expect("couldn't find card");
         hand.remove(pos);
@@ -145,7 +205,7 @@ pub fn play_randomly<R>(state: &mut State, rng: &mut R) where R: Rng {
     }
 }
 
-fn moves(hand: &Vec<u8>, count: u8, card: u8) -> Vec<Move> {
+fn moves(hand: &Hand, count: u8, card: u8) -> Vec<Move> {
     let mut moves = Vec::with_capacity(hand.len() / count as usize + 2);
     moves.push(None);
     let mut i = hand.len();
@@ -176,7 +236,7 @@ fn moves(hand: &Vec<u8>, count: u8, card: u8) -> Vec<Move> {
     moves
 }
 
-fn all_moves(hand: &Vec<u8>) -> Vec<Move> {
+fn all_moves(hand: &Hand) -> Vec<Move> {
     if hand.is_empty() {
         return vec![None]
     }
@@ -268,7 +328,7 @@ impl Node {
     #[allow(unused_must_use)]
     fn write_tree<W: Write>(&self, indent: usize, m: Move, w: &mut W) {
         let indent_string = self.indent_string(indent);
-        writeln!(w, "{}{:?}: [P:{} W/P:{}/{} U:{:?}]",
+        write!(w, "\n{}{:?}: [P:{} W/P:{}/{} U:{:?}]",
             indent_string, m, self.player, self.wins as usize,
             self.plays as usize, self.untried_moves);
         for &(move_, ref child) in self.children.iter() {
@@ -284,17 +344,37 @@ impl Node {
     }
 }
 
-pub fn best_move<R: Rng>(state: &State, iters: usize, rng: &mut R) -> Move {
-    let mut moves = state.moves();
-    rng.shuffle(&mut moves);
-    let mut root = Node::new(NOBODY, moves);
-    for _ in 0..iters {
-        root.uct(&mut state.clone(), rng);
+pub fn best_move<R: Rng>(
+    partial: &PartialState, reals: usize, iters: usize,rng: &mut R) -> Move {
+
+    let mut outcomes: HashMap<Move, usize> = HashMap::new();
+    for r in 0..reals {
+        let state = State::realisation_from(partial, rng);
+        let mut moves = state.moves();
+        rng.shuffle(&mut moves);
+        let mut root = Node::new(NOBODY, moves);
+        for _ in 0..iters {
+            root.uct(&mut state.clone(), rng);
+        }
+        for &(ref move_, ref node) in root.children.iter() {
+            match outcomes.entry(*move_) {
+                Occupied(mut o) => {
+                    let old = *o.get();
+                    o.insert(old + node.plays as usize);
+                },
+                Vacant(v) => {
+                    v.insert(node.plays as usize);
+                },
+            }
+        }
+        if r == 0 && partial.hand.len() <= 2 {
+            debug!("{}", root.tree_string());
+        }
     }
-    if state.top_card.is_none() {
-        debug!("\n{}", root.tree_string());
+    if partial.hand.len() <= 2 {
+        debug!("{:?}", outcomes);
     }
-    root.children.iter().max_by(|c| c.1.plays as i64).unwrap().0
+    *outcomes.iter().max_by(|c| *c.1 as i64).unwrap().0
 }
 
 #[cfg(test)]

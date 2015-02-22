@@ -15,6 +15,6 @@ name = "scum"
 doc = false
 
 [[bin]]
-name = "test"
+name = "scum"
 test = false
 bench = false
