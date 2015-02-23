@@ -18,7 +18,7 @@ fn main() {
             println!("\n");
         }
         let move_ = best_move(
-            &mut state.to_partial_state(), 100, 5000, &mut rng);
+            &mut state.to_partial_state(), 20, 5000, &mut rng);
         println!("{} => {:13}  [{:?}]",
             state.current_player(), format!("{:?}", move_), &state);
         state.apply(move_);

@@ -546,9 +546,6 @@ mod bench {
         rng.shuffle(&mut deck[..]);
         let state = State::new(5, deck);
         let mut root = Node::new(state.current_player(), state.moves());
-        for _ in 0..10000 {
-            root.uct(&mut state.clone(), &mut rng);
-        }
         b.iter(|| {
             root.uct(&mut state.clone(), &mut rng);
             root.plays
