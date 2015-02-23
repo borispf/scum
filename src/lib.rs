@@ -230,7 +230,7 @@ fn moves(hand: &Hand, count: u8, card: u8) -> Vec<Move> {
             let card = hand[i];
             moves.push(Some((count, card)));
             i -= offset;
-            while i > 1 && hand[i] == card { i -= 1; }
+            while i > 1 && hand[i - 1] == card { i -= 1; }
         }
     }
     moves
@@ -411,6 +411,15 @@ mod tests {
             vec![None, M(1, JOKER), M(4, FOUR)], moves(&hand, 4, THREE));
         assert_eq!(vec![None, M(1, JOKER)], moves(&hand, 4, FOUR));
         assert_eq!(vec![None, M(1, JOKER)], moves(&hand, 4, FIVE));
+    }
+
+    #[test]
+    // Regression test from playing with the test client.
+    fn test_moves_close() {
+        let hand = vec![1, 9, 11, 12, 13];
+        let top_card = 11;
+        assert_eq!(vec![None, Some((1, 13)), Some((1, 12))],
+            moves(&hand, 1, top_card));
     }
 
     #[test]
