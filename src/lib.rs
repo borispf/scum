@@ -351,6 +351,9 @@ pub fn best_move<R: Rng>(
     for r in 0..reals {
         let state = State::realisation_from(partial, rng);
         let mut moves = state.moves();
+        if moves.len() == 1 {
+            return moves[0];
+        }
         rng.shuffle(&mut moves);
         let mut root = Node::new(NOBODY, moves);
         for _ in 0..iters {
@@ -367,11 +370,11 @@ pub fn best_move<R: Rng>(
                 },
             }
         }
-        if r == 0 && partial.hand.len() <= 2 {
+        if r == 0 && partial.hand.len() <= 3 {
             debug!("{}", root.tree_string());
         }
     }
-    if partial.hand.len() <= 2 {
+    if partial.hand.len() <= 3 {
         debug!("{:?}", outcomes);
     }
     *outcomes.iter().max_by(|c| *c.1 as i64).unwrap().0
