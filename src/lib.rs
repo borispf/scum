@@ -1,6 +1,7 @@
 #![crate_name(scum)]
 #![feature(collections)]
 #![feature(core)]
+#![feature(old_io)]
 #![feature(std_misc)]
 #![feature(test)]
 
@@ -9,11 +10,12 @@ extern crate rand;
 #[macro_use]
 extern crate log;
 
-use rand::{Rng};
+use rand::{Rng, XorShiftRng};
 use std::collections::{HashMap, VecDeque};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::fmt::Write;
 use std::num::Float;
+use std::str::FromStr;
 
 #[derive(Clone, Debug)]
 pub struct State {
@@ -140,9 +142,6 @@ impl State {
         let hand = &self.hands[*player as usize];
         if self.is_terminal() {
             return vec![]
-        }
-        if self.next_player.len() == 1 {
-            return vec![None]
         }
         match self.top_card {
             None => all_moves(hand),
@@ -345,7 +344,7 @@ impl Node {
 }
 
 pub fn best_move<R: Rng>(
-    partial: &PartialState, reals: usize, iters: usize,rng: &mut R) -> Move {
+    partial: &PartialState, reals: usize, iters: usize, rng: &mut R) -> Move {
 
     let mut outcomes: HashMap<Move, usize> = HashMap::new();
     for r in 0..reals {
@@ -378,6 +377,113 @@ pub fn best_move<R: Rng>(
         debug!("{:?}", outcomes);
     }
     *outcomes.iter().max_by(|c| *c.1 as i64).unwrap().0
+}
+
+pub trait Player {
+    fn choose_move(&mut self, s: State) -> Move;
+}
+
+pub trait FairPlayer {
+    fn choose_move(&mut self, p: PartialState) -> Move;
+}
+
+impl<T: FairPlayer> Player for T {
+    fn choose_move(&mut self, s: State) -> Move {
+        self.choose_move(s.to_partial_state())
+    }
+}
+
+pub struct CheatingUCT {
+    rng: XorShiftRng,
+    iters: usize,
+}
+
+use rand::weak_rng;
+
+impl CheatingUCT {
+    pub fn new(iters: usize) -> CheatingUCT {
+        CheatingUCT {rng: weak_rng(), iters: iters}
+    }
+}
+
+impl Player for CheatingUCT {
+    fn choose_move(&mut self, s: State) -> Move {
+        let mut moves = s.moves();
+        if moves.len() == 1 {
+            return moves[0];
+        }
+        self.rng.shuffle(&mut moves);
+        let mut root = Node::new(NOBODY, moves);
+        for _ in 0..self.iters {
+            root.uct(&mut s.clone(), &mut self.rng);
+        }
+        root.children.iter().max_by(|c| c.1.plays as usize).unwrap().0
+    }
+}
+
+pub struct FairUCT {
+    rng: XorShiftRng,
+    reals: usize,
+    iters: usize,
+}
+
+impl FairUCT {
+    pub fn new(reals: usize, iters: usize) -> FairUCT {
+        FairUCT {rng: weak_rng(), reals: reals, iters: iters}
+    }
+}
+
+impl FairPlayer for FairUCT {
+    fn choose_move(&mut self, p: PartialState) -> Move {
+        best_move(&p, self.reals, self.iters, &mut self.rng)
+    }
+}
+
+pub struct ConsolePlayer;
+
+use std::old_io;
+
+impl FairPlayer for ConsolePlayer {
+    fn choose_move(&mut self, p: PartialState) -> Move {
+        static CARDS: [&'static str; 15] = ["",
+            "3", "4", "5", "6", "7", "8", "9", "10", "Jack",
+            "Queen", "King", "Ace", "2", "Joker"];
+
+        match p.top_card {
+            Some((count, card)) =>
+                println!("Top card: {}x {}", count, CARDS[card as usize]),
+            None => println!("Play whatever you want :)"),
+        };
+        print!("Your cards:");
+        for c in p.hand.iter() {
+            print!(" {}", CARDS[*c as usize]);
+        } println!("");
+        // Dirty hack for getting the moves.
+        let mut move_ = None;
+        while {
+            println!("Possible Moves:");
+            let moves = State::realisation_from(&p, &mut rand::weak_rng()).moves();
+            for (i, m) in moves.iter().enumerate() {
+                match m {
+                    &Some((count, card)) =>
+                        println!("{}: {}x {}", i, count, CARDS[card as usize]),
+                    &None => println!("{}: Pass", i),
+                }
+            }
+            println!("INPUT:");
+            let mut reader = old_io::stdin();
+            let input = reader.read_line().ok().expect("Failed to read line");
+            println!("YOU TYPED:");
+            println!("{}", input);
+            let res = FromStr::from_str(input.trim())
+                .map_err(|e| format!("{:?}", e))
+                .and_then(|i| moves.get(i).map(|m| move_ = *m)
+                    .ok_or("Not a valid move".to_string()))
+                .map_err(|err| println!("{:?}", err));
+            res.is_err()
+        } {}
+        move_
+    }
 }
 
 #[cfg(test)]
