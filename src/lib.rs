@@ -229,7 +229,7 @@ fn moves(hand: &Hand, count: u8, card: u8) -> Vec<Move> {
             let card = hand[i];
             moves.push(Some((count, card)));
             i -= offset;
-            while i > 1 && hand[i - 1] == card { i -= 1; }
+            while i > 0 && hand[i - 1] == card { i -= 1; }
         }
     }
     moves
@@ -525,6 +525,16 @@ mod tests {
         let hand = vec![1, 9, 11, 12, 13];
         let top_card = 11;
         assert_eq!(vec![None, Some((1, 13)), Some((1, 12))],
+            moves(&hand, 1, top_card));
+    }
+
+    #[test]
+    // Regression test from playing with the test client.
+    fn test_moves_duplicate_move() {
+        let hand = vec![7, 7, 9, 10, 11, 12, 13];
+        let top_card = 4;
+        assert_eq!(vec![None, Some((1, 13)), Some((1, 12)), Some((1, 11)),
+            Some((1, 10)), Some((1, 9)), Some((1, 7))],
             moves(&hand, 1, top_card));
     }
 
